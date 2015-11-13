@@ -1,0 +1,16 @@
+#vim files
+*.swp
+*.swo
+
+#exec files
+bin/
+
+
+# OSX files
+.DS_Store
+
+#submission
+*.tgz
+*.txt
+*.zip
+turnin/
