@@ -15,25 +15,34 @@
 #define clr_bit(reg,bit) reg &= ~(1<<bit)
 #define check_bit(reg,bit) (reg&(1<<bit))
 
+#define RF_PORT PORTA
+#define RF_PIN  PINA
+#define RF_DDR  DDRA
+#define CE      1
+#define CSN     2
+#define SCK     3
+#define MOSI    4
+#define MISO    5
+
 /* ------------------------------------------------------------------------- */
 void nrf24_setupPins()
 {
-    set_bit(DDRA,0); // CE output
-    set_bit(DDRA,1); // CSN output
-    set_bit(DDRA,2); // SCK output
-    set_bit(DDRA,3); // MOSI output
-    clr_bit(DDRA,4); // MISO input
+    set_bit(RF_DDR,CE); // CE output
+    set_bit(RF_DDR,CSN); // CSN output
+    set_bit(RF_DDR,SCK); // SCK output
+    set_bit(RF_DDR,MOSI); // MOSI output
+    clr_bit(RF_DDR,MISO); // MISO input
 }
 /* ------------------------------------------------------------------------- */
 void nrf24_ce_digitalWrite(uint8_t state)
 {
     if(state)
     {
-        set_bit(PORTA,0);
+        set_bit(RF_PORT,CE);
     }
     else
     {
-        clr_bit(PORTA,0);
+        clr_bit(RF_PORT,CE);
     }
 }
 /* ------------------------------------------------------------------------- */
@@ -41,11 +50,11 @@ void nrf24_csn_digitalWrite(uint8_t state)
 {
     if(state)
     {
-        set_bit(PORTA,1);
+        set_bit(RF_PORT,CSN);
     }
     else
     {
-        clr_bit(PORTA,1);
+        clr_bit(RF_PORT,CSN);
     }
 }
 /* ------------------------------------------------------------------------- */
@@ -53,11 +62,11 @@ void nrf24_sck_digitalWrite(uint8_t state)
 {
     if(state)
     {
-        set_bit(PORTA,2);
+        set_bit(RF_PORT, SCK);
     }
     else
     {
-        clr_bit(PORTA,2);
+        clr_bit(RF_PORT,SCK);
     }
 }
 /* ------------------------------------------------------------------------- */
@@ -65,16 +74,16 @@ void nrf24_mosi_digitalWrite(uint8_t state)
 {
     if(state)
     {
-        set_bit(PORTA,3);
+        set_bit(RF_PORT,MOSI);
     }
     else
     {
-        clr_bit(PORTA,3);
+        clr_bit(RF_PORT,MOSI);
     }
 }
 /* ------------------------------------------------------------------------- */
 uint8_t nrf24_miso_digitalRead()
 {
-    return check_bit(PINA,4);
+    return check_bit(RF_PIN,MISO);
 }
 /* ------------------------------------------------------------------------- */
