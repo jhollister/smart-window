@@ -23,7 +23,7 @@ static int8_t send_buffer[3];
 static int8_t temp_in = 0;
 static int8_t temp_out = 0;
 static uint8_t status = 0;
-static uint8_t auto_set = 0;
+static uint8_t auto_set = 1;
 static uint8_t data_rcvd = 0;
 
 /* Updates display using the current received temperatures */
