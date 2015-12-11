@@ -1,3 +1,9 @@
+/**
+ * Author: James Hollister
+ * Partner: Roberto Pasillas
+ *
+ * Main state machine functionality for remote
+ */
 #include <avr/io.h>
 #include <stdint.h>
 #include <string.h>
@@ -5,26 +11,37 @@
 #include "lcd.h"
 #include "adc.h"
 #include "scheduler.h"
+#include "bit.h"
 
 #define DEG_SYM 0xDF
 
-enum window_status {
-    NO_CONN,
-    CLOSED,
-    OPEN,
-    CLOSING,
-    OPENING
-};
+#define OPEN_BTN  7
+#define CLOSE_BTN 6
+#define SET_BTN   5
 
-static uint8_t tx_address[5] = {0xD7,0xD7,0xD7,0xD7,0xD7};
-static uint8_t rx_address[5] = {0xE7,0xE7,0xE7,0xE7,0xE7};
-static int8_t rcv_buffer[3];
-static int8_t send_buffer[3];
-static int8_t temp_in = 0;
-static int8_t temp_out = 0;
-static uint8_t status = 0;
-static uint8_t auto_set = 1;
-static uint8_t data_rcvd = 0;
+#define NO_CONN 0
+#define CLOSED  1
+#define OPEN    2
+#define CLOSING 3
+#define OPENING 4
+#define OPEN_PARTIAL 5
+
+static uint8_t _tx_address[5] = {0xD7,0xD7,0xD7,0xD7,0xD7};
+static uint8_t _rx_address[5] = {0xE7,0xE7,0xE7,0xE7,0xE7};
+static int8_t _rcv_buffer[4];
+static int8_t _send_buffer[4];
+static int8_t _temp_in = 0;
+static int8_t _temp_out = 0;
+static int8_t _temp_max = 0xFF;
+static int8_t _temp_min = 65;
+static uint8_t _status = 0;
+static uint8_t _auto_set = 0;
+static uint8_t _auto_send = 0;
+static uint8_t _min_set = 0;
+static uint8_t _max_set = 0;
+static uint8_t _auto = 0;
+static uint8_t _data_rcvd = 0;
+static uint8_t _rf_output = 0;
 
 /* Updates display using the current received temperatures */
 void update_display(void) {
@@ -33,8 +50,8 @@ void update_display(void) {
     LCD_ClearScreen();
     LCD_DisplayString(cursor, "in:");
     cursor += 3;
-    if (data_rcvd) {
-        itoa(temp_in, temp, 10);
+    if (_data_rcvd) {
+        itoa(_temp_in, temp, 10);
         LCD_DisplayString(cursor, temp);
         cursor += strlen(temp);
         LCD_Cursor(cursor);
@@ -46,8 +63,8 @@ void update_display(void) {
     cursor = 9;
     LCD_DisplayString(cursor, "out:");
     cursor += 4;
-    if (data_rcvd) {
-        itoa(temp_out, temp, 10);
+    if (_data_rcvd) {
+        itoa(_temp_out, temp, 10);
         LCD_DisplayString(cursor, temp);
         cursor += strlen(temp);
         LCD_Cursor(cursor);
@@ -57,7 +74,7 @@ void update_display(void) {
         LCD_DisplayString(cursor, "--");
     }
     cursor = 17;
-    switch (status) {
+    switch (_status) {
         case NO_CONN:
             LCD_DisplayString(cursor, "no conn");
             break;
@@ -73,6 +90,9 @@ void update_display(void) {
         case CLOSING:
             LCD_DisplayString(cursor, "closing");
             break;
+        case OPEN_PARTIAL:
+            LCD_DisplayString(cursor, "open");
+            break;
         default:
             LCD_DisplayString(cursor, "error");
             break;
@@ -80,7 +100,7 @@ void update_display(void) {
     cursor = 25;
     LCD_DisplayString(cursor, "auto:");
     cursor += 5;
-    if (auto_set) {
+    if (_auto) {
         LCD_DisplayString(cursor, "on");
     }
     else {
@@ -93,86 +113,250 @@ void update_display(void) {
 /* Update the display if any of the state variables used in the
  * display are updated
  */
-enum disp_states { DISP };
+enum disp_states { DISP_DEF, DISP_MIN_SET, DISP_MAX_SET };
 int tick_disp(int state) {
-    static uint8_t prev_status, prev_auto;
-    static int8_t prev_in, prev_out;
+    static uint8_t prev_status;
+    static uint8_t prev_auto;
+    static int8_t prev_in;
+    static int8_t prev_out;
+
+    static int8_t prev_temp;
+    static char temp[5];
     switch (state) {
-        case DISP:
-            if (prev_status != status ||
-                    prev_auto != auto_set ||
-                    prev_in != temp_in ||
-                    prev_out != temp_out) {
-                prev_status = status;
-                prev_auto = auto_set;
-                prev_in = temp_in;
-                prev_out = temp_out;
+        case DISP_DEF:
+            if (_min_set) {
+                state = DISP_MIN_SET;
+                LCD_ClearScreen();
+                LCD_DisplayString(1, "min temp:");
+                itoa(_temp_min, temp, 10);
+                LCD_DisplayString(10, temp);
+                LCD_Cursor(0);
+            }
+
+            else if (prev_status != _status ||
+                    prev_auto != _auto ||
+                    prev_in != _temp_in ||
+                    prev_out != _temp_out) {
+                prev_status = _status;
+                prev_auto = _auto;
+                prev_in = _temp_in;
+                prev_out = _temp_out;
                 update_display();
             }
             break;
-        default:
-            prev_status = status;
-            prev_auto = auto_set;
-            prev_in = temp_in;
-            prev_out = temp_out;
-            state = DISP;
+        case DISP_MIN_SET:
+            if (_max_set) {
+                prev_temp = _temp_max;
+                state = DISP_MAX_SET;
+                LCD_ClearScreen();
+                LCD_DisplayString(1, "max temp:");
+                itoa(_temp_max, temp, 10);
+                LCD_DisplayString(10, temp);
+                LCD_Cursor(0);
+            }
+            else {
+                itoa(_temp_min, temp, 10);
+                LCD_DisplayString(10, temp);
+                LCD_Cursor(0);
+            }
             break;
-    }
-    return state;
-}
-
-
-
-enum rcv_states { RCV_WAIT };
-int tick_rcv(int state) {
-    switch (state) {
-        case RCV_WAIT:
-            if (nrf24_dataReady()) {
-                data_rcvd = 1;
-                nrf24_getData(rcv_buffer);
-                temp_in = rcv_buffer[0];
-                temp_out = rcv_buffer[1];
-                status = rcv_buffer[2];
+        case DISP_MAX_SET:
+            if (_auto_set) {
+                update_display();
+                state = DISP_DEF;
+            }
+            else {
+                itoa(_temp_max, temp, 10);
+                LCD_DisplayString(10, temp);
+                LCD_Cursor(0);
             }
             break;
         default:
-            state = RCV_WAIT;
+            prev_status = _status;
+            prev_auto = _auto;
+            prev_in = _temp_in;
+            prev_out = _temp_out;
+            state = DISP_DEF;
             break;
     }
     return state;
 }
 
+
+/*
+ * Handle input from the three buttons
+ */
+enum input_states { IN_WAIT, IN_CLOSE, IN_OPEN, IN_SET, IN_SET_MIN, IN_SET_MAX };
+int tick_input(int state) {
+    switch (state) {
+        case IN_WAIT:
+            if ( !GetBit(PINC, OPEN_BTN) && GetBit(PINC, CLOSE_BTN) && GetBit(PINC, SET_BTN) ) {
+                state = IN_OPEN;
+            }
+            else if ( GetBit(PINC, OPEN_BTN) && !GetBit(PINC, CLOSE_BTN) && GetBit(PINC, SET_BTN) ) {
+                state = IN_CLOSE;
+            }
+            else if ( GetBit(PINC, OPEN_BTN) && GetBit(PINC, CLOSE_BTN) && !GetBit(PINC, SET_BTN) ) {
+                _min_set = 1;
+                state = IN_SET;
+            }
+            break;
+        case IN_OPEN:
+            if (GetBit(PINC, OPEN_BTN)) {
+                _rf_output = 0;
+                state = IN_WAIT;
+            }
+            else {
+                _rf_output = OPENING;
+            }
+            break;
+        case IN_CLOSE:
+            if (GetBit(PINC, CLOSE_BTN)) {
+                _rf_output = 0;
+                state = IN_WAIT;
+            }
+            else {
+                _rf_output = CLOSING;
+            }
+            break;
+        case IN_SET:
+            if ( GetBit(PINC, SET_BTN)  && _min_set) {
+                state = IN_SET_MIN;
+            }
+            else if ( GetBit(PINC, SET_BTN)  && _max_set) {
+                state = IN_SET_MAX;
+            }
+            else if ( GetBit(PINC, SET_BTN)  && _auto_set) {
+                _auto_set = 0;
+                _auto_send = 1;
+                state = IN_WAIT;
+            }
+            break;
+        case IN_SET_MIN:
+            if ( !GetBit(PINC, SET_BTN) ) {
+                if (_temp_max == -1) {
+                    _temp_max = _temp_min + 5;
+                }
+                _min_set = 0;
+                _max_set = 1;
+                state = IN_SET;
+            }
+            else if ( !GetBit(PINC, CLOSE_BTN) ) {
+                _temp_min = _temp_min < 100 ? _temp_min + 1 : _temp_min;
+                state = IN_SET;
+            }
+            else if ( !GetBit(PINC, OPEN_BTN) ) {
+                _temp_min = _temp_min > 0 ? _temp_min - 1 : _temp_min;
+                state = IN_SET;
+            }
+            break;
+        case IN_SET_MAX:
+            if ( !GetBit(PINC, SET_BTN) ) {
+                _max_set = 0;
+                _auto_set = 1;
+                state = IN_SET;
+            }
+            else if ( !GetBit(PINC, CLOSE_BTN) ) {
+                _temp_max = _temp_max < 110 ? _temp_max + 1 : _temp_max;
+                state = IN_SET;
+            }
+            else if ( !GetBit(PINC, OPEN_BTN) ) {
+                _temp_max = _temp_max > (_temp_min + 5)  ? _temp_max - 1 : _temp_max;
+                state = IN_SET;
+            }
+            break;
+        default:
+            state = IN_WAIT;
+            break;
+    }
+    return state;
+}
+
+
+
+enum nrf_states { NRF_RCV, NRF_SEND, NRF_WAIT };
+
+int tick_rcv(int state) {
+    switch(state) {
+        case NRF_RCV:
+            if (nrf24_dataReady() && !nrf24_isSending()) {
+                _data_rcvd = 1;
+                nrf24_getData(_rcv_buffer);
+                _temp_in = _rcv_buffer[0];
+                _temp_out = _rcv_buffer[1];
+                _status = _rcv_buffer[2];
+                _auto = _rcv_buffer[3];
+            }
+            break;
+        default:
+            state = NRF_RCV;
+            break;
+    }
+    return state;
+}
+
+int tick_send(int state) {
+    static uint8_t temp;
+    switch (state) {
+        case NRF_SEND:
+            _send_buffer[0] = _temp_max;
+            _send_buffer[1] = _temp_min;
+            _send_buffer[2] = _rf_output;
+            if (_auto_send) {
+                _send_buffer[3] = _auto_send;
+                _auto_send = 0;
+            }
+            else {
+                _send_buffer[3] = 0;
+            }
+            if (_send_buffer[3] || _send_buffer[2]) {
+                nrf24_send(_send_buffer);
+            }
+            break;
+        case NRF_WAIT:
+            if (!nrf24_isSending()) {
+                state = NRF_SEND;
+                temp = nrf24_lastMessageStatus();
+                if (temp == NRF24_MESSAGE_LOST) {
+                    _auto_send = _send_buffer[3];
+                    _status = NO_CONN;
+                }
+                nrf24_powerUpRx();
+            }
+            break;
+        default:
+            state = NRF_SEND;
+            break;
+    }
+    return state;
+}
 
 
 int main() {
     /* initialize lcd data and contorl ports */
     DDRD = 0xFF; PORTD = 0;
-    DDRC = 0xFF; PORTC = 0;
+    DDRC = 0x1F; PORTC = 0xE0;
 
     LCD_init();
     update_display();
 
 
-    /* Channel #2, payload length: 3 */
+    /* Channel #2, payload length: 4 */
     nrf24_init();
-    nrf24_config(2, 3);
+    nrf24_config(6, 4);
 
     /* Set the device addresses */
-    nrf24_tx_address(tx_address);
-    nrf24_rx_address(rx_address);
-
-    /* initialize adc and set to A6 */
-    adc_init();
-    adc_set_pin(6);
+    nrf24_tx_address(_tx_address);
+    nrf24_rx_address(_rx_address);
 
     /* define tasks */
-    tasksNum = 2; // declare number of tasks
-    task tsks[2]; // initialize the task array
+    tasksNum = 3; // declare number of tasks
+    task tsks[3]; // initialize the task array
     tasks = tsks; // set the task array
 
     uint8_t i = 0;
-    tasks[i].state = -1;
-    tasks[i].period = 100;
+    tasks[i].state = NRF_RCV;
+    tasks[i].period = 10;
     tasks[i].elapsedTime = tasks[i].period;
     tasks[i].TickFct = &tick_rcv;
     i++;
@@ -180,8 +364,18 @@ int main() {
     tasks[i].period = 100;
     tasks[i].elapsedTime = tasks[i].period;
     tasks[i].TickFct = &tick_disp;
+    i++;
+    tasks[i].state = IN_WAIT;
+    tasks[i].period = 200;
+    tasks[i].elapsedTime = tasks[i].period;
+    tasks[i].TickFct = &tick_input;
+    i++;
+    /*tasks[i].state = NRF_SEND;*/
+    /*tasks[i].period = 500;*/
+    /*tasks[i].elapsedTime = tasks[i].period;*/
+    /*tasks[i].TickFct = &tick_send;*/
 
-    TimerSet(100);
+    TimerSet(10);
     TimerOn();
 
     while(1) {}

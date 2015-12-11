@@ -1,3 +1,7 @@
+/** 
+ * driver definitions for ds18b20 digital temperature sensor
+ * Adapted from: http://teslabs.com/openplayer/docs/docs/other/ds18b20_pre1.pdf
+ */
 #ifndef DS18B20
 #define DS18B20
 
@@ -28,22 +32,22 @@
 #define THERM_CMD_ALARMSEARCH      0xec
 
 /* Utils */
-#define THERM_INPUT_MODE()  THERM_DDR &= ~(1 << THERM_DQ)
-#define THERM_OUTPUT_MODE() THERM_DDR |= (1 << THERM_DQ)
-#define THERM_LOW()         THERM_PORT &= ~(1 << THERM_DQ)
-#define THERM_HIGH()        THERM_PORT |= (1 << THERM_DQ)
+#define THERM_INPUT_MODE(pin)  THERM_DDR &= ~(1 << pin)
+#define THERM_OUTPUT_MODE(pin) THERM_DDR |= (1 << pin)
+#define THERM_LOW(pin)         THERM_PORT &= ~(1 << pin)
+#define THERM_HIGH(pin)        THERM_PORT |= (1 << pin)
 #define THERM_DECIMAL_STEPS_12BIT   625
 
 void therm_delay(uint16_t delay);
 
-void therm_write_bit(uint8_t bit);
+void therm_write_bit(uint8_t bit, uint8_t pin);
 
-uint8_t therm_read_bit(void);
+uint8_t therm_read_bit(uint8_t pin);
 
-uint8_t therm_read_byte(void);
+uint8_t therm_read_byte(uint8_t pin);
 
-void therm_write_byte(uint8_t byte);
+void therm_write_byte(uint8_t byte, uint8_t pin);
 
-int8_t therm_read_temperature(void);
+int8_t therm_read_temperature(uint8_t pin);
 
 #endif
