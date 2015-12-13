@@ -271,11 +271,51 @@ int tick_input(int state) {
     return state;
 }
 
+int tick_btn(int state) {
+    static uint8_t temp;
+    switch (state) {
+        case IN_WAIT:
+            if ( !GetBit(PINC, OPEN_BTN) ) {
+                state = IN_SET;
+                _send_buffer[0] = OPEN;
+                nrf24_send(_send_buffer);
+                while(nrf24_isSending());
+                temp = nrf24_lastMessageStatus();
+                nrf24_powerUpRx();
+                if (temp == NRF24_MESSAGE_LOST) {
+                    _status = NO_CONN;
+                }
+            }
+            else if ( !GetBit(PINC, CLOSE_BTN) ) {
+                state = IN_SET;
+                _send_buffer[0] = CLOSED;
+                nrf24_send(_send_buffer);
+                while(nrf24_isSending());
+                temp = nrf24_lastMessageStatus();
+                nrf24_powerUpRx();
+                if (temp == NRF24_MESSAGE_LOST) {
+                    _status = NO_CONN;
+                }
+            }
+            break;
+        case IN_SET:
+            if (GetBit(PINC, OPEN_BTN)) {
+                state = IN_WAIT;
+            }
+            break;
+        default:
+            state = IN_WAIT;
+            break;
+    }
+    return state;
+}
+
+
 
 
 enum nrf_states { NRF_RCV, NRF_SEND, NRF_WAIT };
 
-int tick_rcv(int state) {
+int tick_nrf(int state) {
     switch(state) {
         case NRF_RCV:
             if (nrf24_dataReady()) {
@@ -313,21 +353,25 @@ int main() {
     nrf24_rx_address(_rx_address);
 
     /* define tasks */
-    tasksNum = 2; // declare number of tasks
-    task tsks[2]; // initialize the task array
+    tasksNum = 3; // declare number of tasks
+    task tsks[3]; // initialize the task array
     tasks = tsks; // set the task array
 
     uint8_t i = 0;
     tasks[i].state = NRF_RCV;
     tasks[i].period = 100;
     tasks[i].elapsedTime = tasks[i].period;
-    tasks[i].TickFct = &tick_rcv;
+    tasks[i].TickFct = &tick_nrf;
     i++;
     tasks[i].state = -1;
     tasks[i].period = 100;
     tasks[i].elapsedTime = tasks[i].period;
     tasks[i].TickFct = &tick_disp;
     i++;
+    tasks[i].state = IN_WAIT;
+    tasks[i].period = 100;
+    tasks[i].elapsedTime = tasks[i].period;
+    tasks[i].TickFct = &tick_btn;
 
     TimerSet(100);
     TimerOn();

@@ -59,9 +59,59 @@ static uint8_t _rx_address[5] = {0xD7,0xD7,0xD7,0xD7,0xD7};
 static uint8_t _input = INPUT_STOP;
 static uint8_t _rf_input = NO_CONN;
 static uint8_t _auto = 0;
+static uint8_t _revs = 0;
+static uint8_t _steps = 0;
 
 #define CLOSE_IN() ( _rf_input == CLOSING || (PIND & 0x03) == 1 )
 #define OPEN_IN() ( _rf_input == OPENING || (PIND & 0x03) == 2 )
+
+void window_close() {
+    if (_revs == 0)
+        return;
+    PORTC = SetBit(PORTC, DIR_PIN, CLOSE_DIR);
+    PORTC = SetBit(PORTC, SLEEP_PIN, 1);
+    while (_revs != 0) {
+        if (nrf24_dataReady()) {
+            nrf24_getData(_rcv_buffer);
+            PORTC = SetBit(PORTC, SLEEP_PIN, 0);
+            return;
+        }
+        PORTC = SetBit(PORTC, STEP_PIN, 1);
+        _delay_us(300);
+        PORTC = SetBit(PORTC, STEP_PIN, 0);
+        _delay_us(300);
+        _steps--;
+        if (_steps == 0) {
+            _revs--;
+            _steps = 200;
+        }
+    }
+    PORTC = SetBit(PORTC, SLEEP_PIN, 0);
+}
+
+void window_open() {
+    if (_revs == REV_OPEN)
+        return;
+    PORTC = SetBit(PORTC, DIR_PIN, OPEN_DIR);
+    PORTC = SetBit(PORTC, SLEEP_PIN, 1);
+    while (_revs < REV_OPEN) {
+        if (nrf24_dataReady()) {
+            nrf24_getData(_rcv_buffer);
+            PORTC = SetBit(PORTC, SLEEP_PIN, 0);
+            return;
+        }
+        PORTC = SetBit(PORTC, STEP_PIN, 1);
+        _delay_us(300);
+        PORTC = SetBit(PORTC, STEP_PIN, 0);
+        _delay_us(300);
+        _steps++;
+        if (_steps == 200) {
+            _revs++;
+            _steps = 0;
+        }
+    }
+    PORTC = SetBit(PORTC, SLEEP_PIN, 0);
+}
 /* State machines */
 
 
@@ -70,20 +120,23 @@ int tick_send(int state) {
     static uint8_t val = 1;
     switch (state) {
         case NRF_SEND:
-            /*if (nrf24_dataReady() && !nrf24_isSending()) {*/
-                /*nrf24_getData(_rcv_buffer);*/
-                /*if (_rcv_buffer[0] == 0x25) {*/
-                    /*PORTB = SetBit(PORTB, 2, val);*/
-                    /*val = !val;*/
-                /*}*/
-            /*}*/
-            _send_buffer[0] = _temp_in;
+            if (nrf24_dataReady()) {
+                nrf24_getData(_rcv_buffer);
+                if (_rcv_buffer[0] == OPEN) {
+                    window_open();
+                }
+                else if (_rcv_buffer[0] == CLOSED) {
+                    window_close();
+                }
+                val++;
+            }
+            _send_buffer[0] = val;
             _send_buffer[1] = _temp_out;
             _send_buffer[2] = _status == OPEN_PARTIAL ? OPEN : _status;
             _send_buffer[3] = _auto;
             nrf24_send(_send_buffer);
             while(nrf24_isSending());
-            /*nrf24_powerUpRx();*/
+            nrf24_powerUpRx();
             break;
         default:
             state = NRF_SEND;
@@ -118,6 +171,9 @@ int main() {
     nrf24_tx_address(_tx_address);
     nrf24_rx_address(_rx_address);
 
+    // Put motor to sleep on startup
+    PORTC = SetBit(PORTC, SLEEP_PIN, 0);
+
     _temp_in = therm_read_temperature(1);
     _temp_out = therm_read_temperature(0);
 
@@ -133,7 +189,7 @@ int main() {
     tasks[i].TickFct = &tick_temp;
     i++;
     tasks[i].state = NRF_SEND;
-    tasks[i].period = 500;
+    tasks[i].period = 100;
     tasks[i].elapsedTime = tasks[i].period;
     tasks[i].TickFct = &tick_send;
 
