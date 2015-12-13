@@ -9,7 +9,6 @@
 #include <string.h>
 #include "nrf24.h"
 #include "lcd.h"
-#include "adc.h"
 #include "scheduler.h"
 #include "bit.h"
 
@@ -279,7 +278,7 @@ enum nrf_states { NRF_RCV, NRF_SEND, NRF_WAIT };
 int tick_rcv(int state) {
     switch(state) {
         case NRF_RCV:
-            if (nrf24_dataReady() && !nrf24_isSending()) {
+            if (nrf24_dataReady()) {
                 _data_rcvd = 1;
                 nrf24_getData(_rcv_buffer);
                 _temp_in = _rcv_buffer[0];
@@ -290,42 +289,6 @@ int tick_rcv(int state) {
             break;
         default:
             state = NRF_RCV;
-            break;
-    }
-    return state;
-}
-
-int tick_send(int state) {
-    static uint8_t temp;
-    switch (state) {
-        case NRF_SEND:
-            _send_buffer[0] = _temp_max;
-            _send_buffer[1] = _temp_min;
-            _send_buffer[2] = _rf_output;
-            if (_auto_send) {
-                _send_buffer[3] = _auto_send;
-                _auto_send = 0;
-            }
-            else {
-                _send_buffer[3] = 0;
-            }
-            if (_send_buffer[3] || _send_buffer[2]) {
-                nrf24_send(_send_buffer);
-            }
-            break;
-        case NRF_WAIT:
-            if (!nrf24_isSending()) {
-                state = NRF_SEND;
-                temp = nrf24_lastMessageStatus();
-                if (temp == NRF24_MESSAGE_LOST) {
-                    _auto_send = _send_buffer[3];
-                    _status = NO_CONN;
-                }
-                nrf24_powerUpRx();
-            }
-            break;
-        default:
-            state = NRF_SEND;
             break;
     }
     return state;
@@ -350,13 +313,13 @@ int main() {
     nrf24_rx_address(_rx_address);
 
     /* define tasks */
-    tasksNum = 3; // declare number of tasks
-    task tsks[3]; // initialize the task array
+    tasksNum = 2; // declare number of tasks
+    task tsks[2]; // initialize the task array
     tasks = tsks; // set the task array
 
     uint8_t i = 0;
     tasks[i].state = NRF_RCV;
-    tasks[i].period = 10;
+    tasks[i].period = 100;
     tasks[i].elapsedTime = tasks[i].period;
     tasks[i].TickFct = &tick_rcv;
     i++;
@@ -365,17 +328,8 @@ int main() {
     tasks[i].elapsedTime = tasks[i].period;
     tasks[i].TickFct = &tick_disp;
     i++;
-    tasks[i].state = IN_WAIT;
-    tasks[i].period = 200;
-    tasks[i].elapsedTime = tasks[i].period;
-    tasks[i].TickFct = &tick_input;
-    i++;
-    /*tasks[i].state = NRF_SEND;*/
-    /*tasks[i].period = 500;*/
-    /*tasks[i].elapsedTime = tasks[i].period;*/
-    /*tasks[i].TickFct = &tick_send;*/
 
-    TimerSet(10);
+    TimerSet(100);
     TimerOn();
 
     while(1) {}

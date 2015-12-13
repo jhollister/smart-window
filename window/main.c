@@ -8,7 +8,6 @@
 #include <stdint.h>
 #include <string.h>
 #include "nrf24.h"
-#include "adc.h"
 #include "scheduler.h"
 #include "ds18b20.h"
 #include "bit.h"
@@ -65,249 +64,29 @@ static uint8_t _auto = 0;
 #define OPEN_IN() ( _rf_input == OPENING || (PIND & 0x03) == 2 )
 /* State machines */
 
-enum auto_states { AUTO_OFF, AUTO_ON };
-int tick_auto(int state) {
-    switch (state) {
-        case AUTO_OFF:
-            if (_auto) {
-                state = AUTO_ON;
-            }
-            break;
-        case AUTO_ON:
-            if (!_auto) {
-                state = AUTO_OFF;
-            }
-            else {
-                if (_status == OPEN) {
-                    if ((_temp_in < _temp_min)) {
-                        _input = INPUT_CLOSE;
-                    }
-                    else if ((_temp_out > _temp_max)) {
-                        _input = INPUT_CLOSE;
-                    }
-                }
-                else if (_status == CLOSED) {
-                    if ( (_temp_out <= _temp_max) && (_temp_in >= _temp_max) ) {
-                        _input = INPUT_OPEN;
-                    }
-                }
-            }
-            break;
-        default:
-            state = AUTO_OFF;
-            break;
-    }
-    return state;
-}
-
-enum inputs_states { IN_WAIT, IN_CLOSE, IN_OPEN, IN_ALL, IN_PRESS };
-int tick_input(int state) {
-    static uint8_t ticks = 0;
-    static const uint8_t PRESS_TIME = 30;
-    switch (state) {
-        case IN_WAIT:
-            if ( CLOSE_IN() && _status != CLOSED) {
-                _auto = 0;
-                _input = INPUT_CLOSE;
-                state = IN_CLOSE;
-            }
-            else if ( OPEN_IN() && _status != OPEN ) {
-                _auto = 0;
-                _input = INPUT_OPEN;
-                state = IN_OPEN;
-            }
-            else if (_auto) {
-                if (_status == OPEN) {
-                    if (_temp_out > _temp_max) {
-                        _input = INPUT_CLOSE;
-                        state = IN_CLOSE;
-                    }
-                    else if (_temp_in < _temp_min) {
-                        _input = INPUT_CLOSE;
-                        state = IN_CLOSE;
-                    }
-                }
-                else if (_status == CLOSED) {
-                    if ( (_temp_out <= _temp_max) && (_temp_in >= _temp_max) ) {
-                        _input = INPUT_OPEN;
-                        state = IN_OPEN;
-                    }
-                }
-            }
-
-            break;
-        case IN_CLOSE:
-            if ( !CLOSE_IN() && ticks > PRESS_TIME) {
-                _input = INPUT_STOP;
-                state = IN_WAIT;
-            }
-            else if ( !CLOSE_IN() && ticks < PRESS_TIME) {
-                _input = INPUT_CLOSE_ALL;
-                ticks = 0;
-                state = IN_ALL;
-            }
-            else {
-                ticks = ticks <= PRESS_TIME ? ticks + 1 : ticks;
-            }
-            break;
-        case IN_OPEN:
-            if ( !OPEN_IN() && ticks > PRESS_TIME) {
-                _input = INPUT_STOP;
-                state = IN_WAIT;
-            }
-            else if ( !OPEN_IN() && ticks < PRESS_TIME) {
-                _input = INPUT_OPEN_ALL;
-                ticks = 0;
-                state = IN_ALL;
-            }
-            else {
-                ticks = ticks <= PRESS_TIME ? ticks + 1 : ticks;
-            }
-            break;
-        case IN_ALL:
-            // Stay in this state until a button is pressed or status is changed
-            if ( OPEN_IN() || CLOSE_IN() || _status == OPEN || _status == CLOSED ) {
-                state = IN_PRESS;
-                _input = INPUT_STOP;
-            }
-            break;
-        case IN_PRESS:
-            // Wait for button to be unpressed
-            if ( !OPEN_IN() && !CLOSE_IN() ) {
-                state = IN_WAIT;
-            }
-            break;
-        default:
-            state = IN_WAIT;
-            break;
-    }
-    return state;
-}
-
-/** 
- *  Motor state machine
- *  Handles the opening and closing of the window.
- *  Keeps track of the postion of the window 
- **/
-enum motor_states { MOTOR_WAIT, MOTOR_STEP, MOTOR_OPEN, MOTOR_CLOSE };
-int tick_motor(int state) {
-    static uint8_t step_val = 0;
-    static uint8_t steps = 0;
-    static uint8_t revs = 0;
-    switch (state) {
-        case MOTOR_WAIT:
-            PORTC = SetBit(PORTC, SLEEP_PIN, 0);
-            if ( _input == INPUT_CLOSE ) {
-                PORTC = SetBit(PORTC, SLEEP_PIN, 1);
-                PORTC = SetBit(PORTC, DIR_PIN, CLOSE_DIR);
-                _status = CLOSING;
-                state = MOTOR_CLOSE;
-            }
-            else if ( _input == INPUT_OPEN ) {
-                PORTC = SetBit(PORTC, SLEEP_PIN, 1);
-                PORTC = SetBit(PORTC, DIR_PIN, OPEN_DIR);
-                _status = OPENING;
-                state = MOTOR_OPEN;
-            }
-            break;
-        case MOTOR_OPEN:
-            if ( revs >= REV_OPEN ) {
-                _status = OPEN;
-                state = MOTOR_WAIT;
-            }
-            else if ( _input == INPUT_STOP ) {
-                _status = OPEN_PARTIAL;
-                state = MOTOR_WAIT;
-            }
-            else {
-                step_val = !step_val;
-                PORTC = SetBit(PORTC, STEP_PIN, step_val);
-                if (step_val == 0) {
-                    steps++;
-                }
-                if (steps == 200) {
-                    steps = 0;
-                    revs++;
-                }
-            }
-            break;
-        case MOTOR_CLOSE:
-            if ( revs == 0 ) {
-                _status = CLOSED;
-                state = MOTOR_WAIT;
-            }
-            else if ( _input == INPUT_STOP ) {
-                _status = OPEN;
-                state = MOTOR_WAIT;
-            }
-            else {
-                step_val = !step_val;
-                PORTC = SetBit(PORTC, STEP_PIN, step_val);
-                if (step_val == 0) {
-                    steps--;
-                }
-                if (steps == 0) {
-                    steps = STEPS_REV;
-                    revs--;
-                }
-            }
-            break;
-        default:
-            state = MOTOR_WAIT;
-            break;
-    }
-    return state;
-}
 
 enum nrf_states { NRF_RCV, NRF_SEND, NRF_WAIT };
 int tick_send(int state) {
-    static uint8_t first_time = 1;
-    static uint8_t temp;
+    static uint8_t val = 1;
     switch (state) {
         case NRF_SEND:
+            /*if (nrf24_dataReady() && !nrf24_isSending()) {*/
+                /*nrf24_getData(_rcv_buffer);*/
+                /*if (_rcv_buffer[0] == 0x25) {*/
+                    /*PORTB = SetBit(PORTB, 2, val);*/
+                    /*val = !val;*/
+                /*}*/
+            /*}*/
             _send_buffer[0] = _temp_in;
             _send_buffer[1] = _temp_out;
             _send_buffer[2] = _status == OPEN_PARTIAL ? OPEN : _status;
             _send_buffer[3] = _auto;
-            if ((_status != CLOSING && _status != OPENING)) {
-                first_time = 1;
-                state = NRF_WAIT;
-                nrf24_send(_send_buffer);
-            }
-            else if ((_status == CLOSING || _status == OPENING) && first_time) {
-                nrf24_send(_send_buffer);
-                state = NRF_WAIT;
-                first_time = 0;
-            }
-            break;
-        case NRF_WAIT:
-            if (!nrf24_isSending()) {
-                state = NRF_SEND;
-                nrf24_powerUpRx();
-            }
+            nrf24_send(_send_buffer);
+            while(nrf24_isSending());
+            /*nrf24_powerUpRx();*/
             break;
         default:
             state = NRF_SEND;
-            break;
-    }
-    return state;
-}
-
-int tick_rcv(int state) {
-    switch(state) {
-        case NRF_RCV:
-            if (nrf24_dataReady() && !nrf24_isSending()) {
-                nrf24_getData(_rcv_buffer);
-                _temp_max = _rcv_buffer[0];
-                _temp_min = _rcv_buffer[1];
-                _rf_input = _rcv_buffer[2];
-                if (_rcv_buffer[3]) {
-                    _auto = 1;
-                }
-            }
-            break;
-        default:
-            state = NRF_RCV;
             break;
     }
     return state;
@@ -333,6 +112,7 @@ int tick_temp(int state) {
 int main() {
     DDRD = 0x00; PORTD = 0xFF;
     DDRC = 0xFF; PORTC = 0x00;
+    DDRB = 0xFF; PORTB = 0x00;
     nrf24_init();
     nrf24_config(6, 4);
     nrf24_tx_address(_tx_address);
@@ -342,8 +122,8 @@ int main() {
     _temp_out = therm_read_temperature(0);
 
     /* define tasks */
-    tasksNum = 5; // declare number of tasks
-    task tsks[5]; // initialize the task array
+    tasksNum = 2; // declare number of tasks
+    task tsks[2]; // initialize the task array
     tasks = tsks; // set the task array
 
     uint8_t i = 0;
@@ -353,26 +133,11 @@ int main() {
     tasks[i].TickFct = &tick_temp;
     i++;
     tasks[i].state = NRF_SEND;
-    tasks[i].period = 100;
+    tasks[i].period = 500;
     tasks[i].elapsedTime = tasks[i].period;
     tasks[i].TickFct = &tick_send;
-    i++;
-    tasks[i].state = IN_WAIT;
-    tasks[i].period = 100;
-    tasks[i].elapsedTime = tasks[i].period;
-    tasks[i].TickFct = &tick_input;
-    i++;
-    tasks[i].state = NRF_RCV;
-    tasks[i].period = 10;
-    tasks[i].elapsedTime = tasks[i].period;
-    tasks[i].TickFct = &tick_rcv;
-    i++;
-    tasks[i].state = MOTOR_WAIT;
-    tasks[i].period = 1;
-    tasks[i].elapsedTime = tasks[i].period;
-    tasks[i].TickFct = &tick_motor;
 
-    TimerSet(1);
+    TimerSet(100);
     TimerOn();
 
     while(1) {}
