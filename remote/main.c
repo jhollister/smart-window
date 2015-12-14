@@ -42,6 +42,16 @@ static uint8_t _auto = 0;
 static uint8_t _data_rcvd = 0;
 static uint8_t _rf_output = 0;
 
+int send_rx(uint8_t *buffer) {
+    uint8_t result;
+    nrf24_send(buffer);
+    while (!nrf24_isSending());
+
+    result = nrf24_retransmissionCount();
+    nrf24_powerUpRx();
+    return result;
+}
+
 /* Updates display using the current received temperatures */
 void update_display(void) {
     static char temp[5];
@@ -160,7 +170,7 @@ int tick_disp(int state) {
             }
             break;
         case DISP_MAX_SET:
-            if (_auto_set) {
+            if (!_max_set) {
                 update_display();
                 state = DISP_DEF;
             }
@@ -186,36 +196,12 @@ int tick_disp(int state) {
  * Handle input from the three buttons
  */
 enum input_states { IN_WAIT, IN_CLOSE, IN_OPEN, IN_SET, IN_SET_MIN, IN_SET_MAX };
-int tick_input(int state) {
+int tick_menu(int state) {
     switch (state) {
         case IN_WAIT:
-            if ( !GetBit(PINC, OPEN_BTN) && GetBit(PINC, CLOSE_BTN) && GetBit(PINC, SET_BTN) ) {
-                state = IN_OPEN;
-            }
-            else if ( GetBit(PINC, OPEN_BTN) && !GetBit(PINC, CLOSE_BTN) && GetBit(PINC, SET_BTN) ) {
-                state = IN_CLOSE;
-            }
-            else if ( GetBit(PINC, OPEN_BTN) && GetBit(PINC, CLOSE_BTN) && !GetBit(PINC, SET_BTN) ) {
+            if ( !GetBit(PINC, SET_BTN) ) {
                 _min_set = 1;
                 state = IN_SET;
-            }
-            break;
-        case IN_OPEN:
-            if (GetBit(PINC, OPEN_BTN)) {
-                _rf_output = 0;
-                state = IN_WAIT;
-            }
-            else {
-                _rf_output = OPENING;
-            }
-            break;
-        case IN_CLOSE:
-            if (GetBit(PINC, CLOSE_BTN)) {
-                _rf_output = 0;
-                state = IN_WAIT;
-            }
-            else {
-                _rf_output = CLOSING;
             }
             break;
         case IN_SET:
@@ -226,8 +212,10 @@ int tick_input(int state) {
                 state = IN_SET_MAX;
             }
             else if ( GetBit(PINC, SET_BTN)  && _auto_set) {
-                _auto_set = 0;
-                _auto_send = 1;
+                _send_buffer[0] = 3;
+                _send_buffer[1] = _temp_max;
+                _send_buffer[2] = _temp_min;
+                send_rx(_send_buffer);
                 state = IN_WAIT;
             }
             break;
@@ -275,25 +263,17 @@ int tick_btn(int state) {
     static uint8_t temp;
     switch (state) {
         case IN_WAIT:
-            if ( !GetBit(PINC, OPEN_BTN) ) {
+            if ( !GetBit(PINC, OPEN_BTN)  && !_min_set && !_max_set) {
                 state = IN_SET;
                 _send_buffer[0] = OPEN;
-                nrf24_send(_send_buffer);
-                while(nrf24_isSending());
-                temp = nrf24_lastMessageStatus();
-                nrf24_powerUpRx();
-                if (temp == NRF24_MESSAGE_LOST) {
+                if (send_rx(_send_buffer) == NRF24_MESSAGE_LOST) {
                     _status = NO_CONN;
                 }
             }
-            else if ( !GetBit(PINC, CLOSE_BTN) ) {
+            else if ( !GetBit(PINC, CLOSE_BTN) && !_min_set && !_max_set) {
                 state = IN_SET;
                 _send_buffer[0] = CLOSED;
-                nrf24_send(_send_buffer);
-                while(nrf24_isSending());
-                temp = nrf24_lastMessageStatus();
-                nrf24_powerUpRx();
-                if (temp == NRF24_MESSAGE_LOST) {
+                if (send_rx(_send_buffer) == NRF24_MESSAGE_LOST) {
                     _status = NO_CONN;
                 }
             }
@@ -353,8 +333,8 @@ int main() {
     nrf24_rx_address(_rx_address);
 
     /* define tasks */
-    tasksNum = 3; // declare number of tasks
-    task tsks[3]; // initialize the task array
+    tasksNum = 4; // declare number of tasks
+    task tsks[4]; // initialize the task array
     tasks = tsks; // set the task array
 
     uint8_t i = 0;
@@ -372,6 +352,11 @@ int main() {
     tasks[i].period = 100;
     tasks[i].elapsedTime = tasks[i].period;
     tasks[i].TickFct = &tick_btn;
+    i++;
+    tasks[i].state = IN_WAIT;
+    tasks[i].period = 100;
+    tasks[i].elapsedTime = tasks[i].period;
+    tasks[i].TickFct = &tick_menu;
 
     TimerSet(100);
     TimerOn();
