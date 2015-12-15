@@ -58,7 +58,7 @@ static uint8_t _status = CLOSED;
 static uint8_t _tx_address[5] = {0xE7,0xE7,0xE7,0xE7,0xE7};
 static uint8_t _rx_address[5] = {0xD7,0xD7,0xD7,0xD7,0xD7};
 static uint8_t _auto = 0;
-static uint8_t _revs = 0;
+static uint8_t _revs = REV_OPEN;
 static uint8_t _steps = 0;
 static uint8_t _no_force_sensor = 0;
 
@@ -79,8 +79,12 @@ void window_close() {
     uint16_t wait = 1000;
     uint16_t force = ADC;
     uint16_t close_count = 0;
-    if (force >= 100)
+    if (force >= 100) {
+        _status = CLOSED;
+        _revs = 0;
+        _steps = 0;
         return;
+    }
     _send_buffer[2] = CLOSING;
     send_rx(_send_buffer);
     PORTC = SetBit(PORTC, DIR_PIN, CLOSE_DIR);
@@ -113,7 +117,7 @@ void window_close() {
                 break;
             }
         }
-        wait = wait > 300 ? wait - 1 : wait;
+        wait = wait > 400 ? wait - 1 : wait;
         force = ADC;
     }
     _status = CLOSED;
@@ -262,25 +266,10 @@ int tick_nrf(int state) {
 
 enum temp_states { TEMP_INIT, TEMP_GET };
 int tick_temp(int state) {
-    static uint8_t prev_temp_in;
-    static uint8_t prev_temp_out;
-
     switch (state) {
-        case TEMP_INIT:
-            prev_temp_in = _temp_in;
-            prev_temp_out = _temp_out;
-            state = TEMP_GET;
-            break;
         case TEMP_GET:
-            // Don't check temperature while window is opening or closing
-            if (_status == OPEN || _status == CLOSED || _status == OPEN_PARTIAL) {
-                _temp_in = therm_read_temperature(1);
-                if ( (_temp_in - prev_temp_in) > 10 || (_temp_in - prev_temp_in) < -10)
-                    _temp_in = prev_temp_in;
-                _temp_out = therm_read_temperature(0);
-                if ( (_temp_out - prev_temp_out) > 10 || (_temp_out - prev_temp_out) < -10)
-                    _temp_out = prev_temp_in;
-            }
+            _temp_in = therm_read_temperature(1);
+            _temp_out = therm_read_temperature(0);
             break;
         default:
             state = TEMP_INIT;
@@ -301,6 +290,8 @@ int main() {
 
     // Put motor to sleep on startup
     PORTC = SetBit(PORTC, SLEEP_PIN, 0);
+    // Close  window so we know what state it is in for sure
+    window_close();
 
     _temp_in = therm_read_temperature(1);
     _temp_out = therm_read_temperature(0);
@@ -311,8 +302,8 @@ int main() {
     tasks = tsks; // set the task array
 
     uint8_t i = 0;
-    tasks[i].state = TEMP_INIT;
-    tasks[i].period = 200;
+    tasks[i].state = TEMP_GET;
+    tasks[i].period = 3000;
     tasks[i].elapsedTime = tasks[i].period;
     tasks[i].TickFct = &tick_temp;
     i++;

@@ -32,8 +32,8 @@ static int8_t _send_buffer[4];
 static int8_t _temp_in = 0;
 static int8_t _temp_out = 0;
 static int8_t _temp_max = 0xFF;
-static int8_t _temp_min = 65;
-static uint8_t _status = 0;
+static int8_t _temp_min = 68;
+static uint8_t _status = NO_CONN;
 static uint8_t _auto_set = 0;
 static uint8_t _auto_send = 0;
 static uint8_t _min_set = 0;
@@ -185,6 +185,7 @@ int tick_disp(int state) {
             prev_auto = _auto;
             prev_in = _temp_in;
             prev_out = _temp_out;
+            update_display();
             state = DISP_DEF;
             break;
     }
@@ -221,8 +222,8 @@ int tick_menu(int state) {
             break;
         case IN_SET_MIN:
             if ( !GetBit(PINC, SET_BTN) ) {
-                if (_temp_max == -1) {
-                    _temp_max = _temp_min + 5;
+                if (_temp_max == -1 || (_temp_max < (_temp_max + 3))) {
+                    _temp_max = _temp_min + 3;
                 }
                 _min_set = 0;
                 _max_set = 1;
@@ -248,7 +249,7 @@ int tick_menu(int state) {
                 state = IN_SET;
             }
             else if ( !GetBit(PINC, OPEN_BTN) ) {
-                _temp_max = _temp_max > (_temp_min + 5)  ? _temp_max - 1 : _temp_max;
+                _temp_max = _temp_max > (_temp_min + 3)  ? _temp_max - 1 : _temp_max;
                 state = IN_SET;
             }
             break;
@@ -321,8 +322,6 @@ int main() {
     DDRC = 0x1F; PORTC = 0xE0;
 
     LCD_init();
-    update_display();
-
 
     /* Channel #2, payload length: 4 */
     nrf24_init();
@@ -331,6 +330,8 @@ int main() {
     /* Set the device addresses */
     nrf24_tx_address(_tx_address);
     nrf24_rx_address(_rx_address);
+
+    update_display();
 
     /* define tasks */
     tasksNum = 4; // declare number of tasks
